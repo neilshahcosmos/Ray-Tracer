@@ -7,6 +7,7 @@
 #include "stb_image/stb_image_write.h"
 
 #include "headers\vec3.h"
+#include "headers\ray.h"
 
 // Cuda Functions:
 #define checkCudaErrors(val) check_cuda((val), #val, __FILE__, __LINE__)
@@ -20,27 +21,51 @@ void check_cuda(cudaError_t result, char const *const func, const char *const fi
     }
 }
 
+// Coloring function
+__device__ vec3 ray_color(const ray& r) {
+    vec3 unit_direction = unit_vector(r.direction());
+    float param = 0.5f * (unit_direction.y() + 1.0f);
+    return (1.0f - param) * vec3(1.0f, 1.0f, 1.0f) + param * vec3(0.5f, 0.7f, 1.0f);
+}
+
 // Rendering Kernel
 __global__
-void render(vec3* frameBuffer, int max_x, int max_y) {
+void render(vec3* frameBuffer, int max_x, int max_y,
+            vec3 origin, vec3 lower_left_corner, vec3 horizontal, vec3 vertical) {
     int i = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     if((i >= max_x) || (j >= max_y)) {
         return;
     }
 
+    float u = float(i) / float(max_x);
+    float v = float(j) / float(max_y);
+    ray r(origin, lower_left_corner + u*horizontal + v*vertical);
     int pixel_index = j * max_x + i;
-    frameBuffer[pixel_index] = vec3(float(i) / max_x, float(j) / max_y, 0.25f);
+    color c = ray_color(r);
+    frameBuffer[pixel_index] = c;
 }
 
 int main() {
     // Image Parameters
-    const auto aspect_ratio = 1.0f;
-    const int image_width = 256;
+    const auto aspect_ratio = 16.0f / 9.0f;
+    const int image_width = 400;
     const int image_height = static_cast<int>(image_width / aspect_ratio);
+    
+    // Camera Parameters
+    auto viewport_height = 2.0f;
+    auto viewport_width = aspect_ratio * viewport_height;
+    auto focal_length = 1.0f;
+    
     const int channels = 3;
     int num_pixels = image_width * image_height;
     size_t frameBuffer_size = num_pixels * sizeof(vec3);
+
+    auto origin = vec3(0.0f, 0.0f, 0.0f);
+    auto center = vec3(0.0f, 0.0f, -focal_length);
+    auto horizontal = vec3(viewport_width, 0.0f, 0.0f);
+    auto vertical = vec3(0.0f, viewport_height, 0.0f);
+    auto lower_left_corner = origin - horizontal/2 - vertical/2 + center;
 
     // Allocate the Frame Buffer and set grid parameters
     vec3 *frameBuffer;
@@ -54,7 +79,8 @@ int main() {
     clock_t start, stop;
     start = clock();
 
-    render<<<blocks, threads>>>(frameBuffer, image_width, image_height);
+    render<<<blocks, threads>>>(frameBuffer, image_width, image_height,
+                                origin, lower_left_corner, horizontal, vertical);
     checkCudaErrors(cudaGetLastError());
     checkCudaErrors(cudaDeviceSynchronize());
 
